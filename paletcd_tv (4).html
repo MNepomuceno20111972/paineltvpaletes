@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaletCD — Mural de Paletes nas Lojas</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<style>
+:root{
+  --bg:#071426; --bg2:#0d2039; --card:#122a47;
+  --line:#1e3d63;
+  --navy:#2b7fff; --teal:#00d9ff; --green:#34C759; --amber:#FFB800;
+  --red:#FF453A; --orange:#FF9F0A; --purple:#BF5AF2;
+  --tx:#eaf3ff; --tx2:#9db6d4; --tx3:#5f7ea5;
+  --font:'DM Sans',sans-serif; --mono:'DM Mono',monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{
+  font-family:var(--font);
+  background:radial-gradient(ellipse at 20% 0%,#123056 0%,var(--bg) 55%);
+  color:var(--tx);
+  display:flex;flex-direction:column;
+}
+body.debug{cursor:default;}
+/* O cursor some só depois de 3s parado. Mexeu o mouse, ele volta
+   junto com os controles — dá para validar o painel sem teclado. */
+body.idle{cursor:none;}
+body.idle .nav-btn,body.idle .pause-badge{opacity:0;pointer-events:none;}
+
+.nav-btn{
+  position:fixed;top:50%;transform:translateY(-50%);
+  width:62px;height:110px;z-index:60;
+  background:rgba(18,42,71,.85);border:1px solid var(--line);
+  color:var(--tx);font-size:40px;line-height:1;
+  cursor:pointer;transition:opacity .3s,background .2s;
+  display:flex;align-items:center;justify-content:center;
+}
+.nav-btn:hover{background:var(--navy);border-color:var(--navy);}
+.nav-l{left:0;border-radius:0 14px 14px 0;}
+.nav-r{right:0;border-radius:14px 0 0 14px;}
+
+.pause-badge{
+  position:fixed;top:82px;left:50%;transform:translateX(-50%);
+  z-index:60;background:rgba(255,184,0,.16);
+  border:1px solid var(--amber);color:var(--amber);
+  border-radius:20px;padding:6px 18px;
+  font-size:13px;font-weight:700;letter-spacing:1px;
+  transition:opacity .3s;display:none;
+}
+.pause-badge.on{display:block;}
+
+.pdot{cursor:pointer;}
+.dots{padding:8px 14px;}
+
+/* ── HEADER ───────────────────────── */
+.hdr{
+  display:flex;align-items:center;gap:22px;
+  padding:14px 30px;
+  background:rgba(7,20,38,.75);
+  border-bottom:1px solid var(--line);
+  flex-shrink:0;
+}
+.hdr-logo{font-size:26px;font-weight:800;letter-spacing:1px;color:#fff;white-space:nowrap;}
+.hdr-logo span{color:var(--teal);}
+.hdr-sub{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--tx3);margin-top:1px;}
+.hdr-periodo{
+  background:rgba(43,127,255,.16);border:1px solid var(--navy);
+  border-radius:8px;padding:6px 16px;
+  font-size:15px;font-weight:700;color:var(--teal);white-space:nowrap;
+}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:22px;}
+.hdr-clock{font-family:var(--mono);font-size:30px;font-weight:700;color:#fff;letter-spacing:1px;}
+.hdr-date{font-size:12px;color:var(--tx2);text-align:right;margin-top:-2px;}
+.hdr-status{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tx2);white-space:nowrap;}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--tx3);flex-shrink:0;}
+.dot.on{background:var(--green);box-shadow:0 0 12px var(--green);animation:pulse 2.4s infinite;}
+.dot.off{background:var(--red);box-shadow:0 0 12px var(--red);}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── PROGRESSO DA ROTAÇÃO ─────────── */
+.progress{height:3px;background:rgba(255,255,255,.06);flex-shrink:0;}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--navy),var(--teal));width:0%;}
+
+/* ── PALCO ────────────────────────── */
+.stage{flex:1;position:relative;overflow:hidden;}
+.panel{
+  position:absolute;inset:0;
+  padding:20px 30px;
+  display:none;flex-direction:column;gap:16px;
+  opacity:0;transform:translateY(18px);
+  transition:opacity .55s ease,transform .55s ease;
+}
+.panel.on{display:flex;opacity:1;transform:none;}
+.panel-title{
+  font-size:14px;font-weight:800;letter-spacing:3px;text-transform:uppercase;
+  color:var(--tx3);display:flex;align-items:center;gap:12px;flex-shrink:0;
+}
+.panel-title::before{content:'';width:5px;height:20px;background:var(--teal);border-radius:3px;}
+
+/* ── KPIs ─────────────────────────── */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;flex-shrink:0;}
+.kpi{
+  background:linear-gradient(160deg,var(--card) 0%,rgba(18,42,71,.55) 100%);
+  border:1px solid var(--line);border-top:4px solid var(--navy);
+  border-radius:14px;padding:16px 20px;
+}
+.kpi.teal{border-top-color:var(--teal);} .kpi.green{border-top-color:var(--green);}
+.kpi.amber{border-top-color:var(--amber);} .kpi.red{border-top-color:var(--red);}
+.kpi.purple{border-top-color:var(--purple);}
+.kpi-l{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--tx3);}
+.kpi-v{font-family:var(--mono);font-size:52px;font-weight:700;line-height:1.05;margin-top:4px;color:#fff;}
+.kpi.teal .kpi-v{color:var(--teal);} .kpi.green .kpi-v{color:var(--green);}
+.kpi.amber .kpi-v{color:var(--amber);} .kpi.red .kpi-v{color:var(--red);}
+.kpi.purple .kpi-v{color:var(--purple);}
+.kpi-s{font-size:12px;color:var(--tx2);margin-top:3px;}
+
+/* ── CARDS / GRID ─────────────────── */
+.row{display:grid;gap:16px;flex:1;min-height:0;}
+.row.c2{grid-template-columns:1fr 1fr;}
+.row.c3{grid-template-columns:repeat(3,1fr);}
+
+/* Capa: só cards, então eles crescem para preencher a tela */
+.kpis-hero{
+  grid-template-columns:repeat(3,1fr);
+  grid-auto-rows:1fr;
+  flex:1;min-height:0;gap:20px;
+}
+.kpis-hero .kpi{
+  display:flex;flex-direction:column;justify-content:center;
+  padding:24px 30px;border-top-width:6px;border-radius:18px;
+}
+.kpis-hero .kpi-l{font-size:15px;letter-spacing:2.5px;}
+.kpis-hero .kpi-v{font-size:clamp(56px,7.5vw,104px);margin-top:8px;}
+.kpis-hero .kpi-s{font-size:16px;margin-top:6px;}
+@media (max-width:1100px){
+  .kpis-hero{grid-template-columns:repeat(2,1fr);}
+  .row.c3{grid-template-columns:1fr;}
+}
+.card{
+  background:linear-gradient(160deg,var(--card) 0%,rgba(18,42,71,.5) 100%);
+  border:1px solid var(--line);border-radius:14px;
+  padding:16px 20px;display:flex;flex-direction:column;min-height:0;
+}
+.card-t{
+  font-size:13px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--tx2);margin-bottom:14px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+}
+.card-t em{font-style:normal;font-family:var(--mono);color:var(--tx3);font-size:12px;letter-spacing:0;}
+
+/* ── BARRAS ───────────────────────── */
+.bars{display:flex;flex-direction:column;gap:9px;flex:1;justify-content:space-around;min-height:0;}
+.bar{display:flex;align-items:center;gap:12px;}
+.bar-pos{
+  font-family:var(--mono);font-size:13px;font-weight:700;color:var(--tx3);
+  width:24px;text-align:right;flex-shrink:0;
+}
+.bar-d{
+  font-family:var(--mono);font-size:13px;font-weight:700;
+  color:var(--teal);background:rgba(0,217,255,.10);
+  border:1px solid rgba(0,217,255,.28);border-radius:5px;
+  padding:2px 8px;flex-shrink:0;letter-spacing:.5px;
+}
+.bar-n{
+  font-size:17px;font-weight:600;color:var(--tx);
+  width:230px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.bar-track{flex:1;height:26px;background:rgba(255,255,255,.05);border-radius:6px;position:relative;min-width:0;}
+.bar-fill{height:100%;border-radius:6px;transition:width .8s cubic-bezier(.4,0,.2,1);min-width:3px;}
+.bar-v{
+  font-family:var(--mono);font-size:20px;font-weight:700;color:#fff;
+  width:92px;text-align:right;flex-shrink:0;
+}
+.bar-v.neg{color:var(--red);}
+
+/* ── DONUT ────────────────────────── */
+.donut-wrap{display:flex;align-items:center;gap:24px;flex:1;min-height:0;}
+.donut-wrap svg{flex-shrink:0;}
+.leg{flex:1;display:flex;flex-direction:column;gap:9px;min-width:0;overflow:hidden;}
+.leg-i{display:flex;align-items:center;gap:10px;font-size:15px;}
+.leg-c{width:14px;height:14px;border-radius:4px;flex-shrink:0;}
+.leg-n{flex:1;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.leg-q{font-family:var(--mono);color:var(--tx2);font-size:14px;}
+.leg-p{font-family:var(--mono);font-weight:700;color:#fff;width:56px;text-align:right;}
+
+/* ── ESTADOS ──────────────────────── */
+.empty{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;color:var(--tx3);text-align:center;padding:30px;
+}
+.empty-ic{font-size:64px;opacity:.4;}
+.empty-t{font-size:22px;font-weight:700;color:var(--tx2);}
+.empty-d{font-size:15px;max-width:620px;line-height:1.6;}
+.empty-btn{
+  margin-top:10px;background:var(--navy);color:#fff;border:none;
+  border-radius:10px;padding:14px 28px;font-family:var(--font);
+  font-size:15px;font-weight:700;cursor:pointer;
+}
+.empty-btn:hover{background:#1a6ae8;}
+.empty-btn:disabled{opacity:.5;cursor:default;}
+.empty-warn{font-size:12px;color:var(--tx3);max-width:520px;line-height:1.5;margin-top:4px;}
+
+/* ── DOTS DE PAINEL ───────────────── */
+.dots{
+  position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+  display:flex;gap:9px;z-index:20;
+}
+.pdot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.16);transition:all .3s;}
+.pdot.on{background:var(--teal);width:26px;border-radius:5px;}
+
+/* ── FOOTER ───────────────────────── */
+.ftr{
+  display:flex;align-items:center;gap:20px;
+  padding:9px 30px;background:rgba(7,20,38,.75);
+  border-top:1px solid var(--line);
+  font-size:12px;color:var(--tx3);flex-shrink:0;
+}
+.ftr b{color:var(--tx2);font-weight:600;}
+
+/* ── ESCALA PARA TELAS MENORES ────── */
+@media (max-width:1400px){
+  .kpi-v{font-size:42px;} .bar-n{width:180px;font-size:15px;}
+  .bar-v{font-size:18px;width:80px;}
+}
+@media (max-width:1100px){
+  .kpis{grid-template-columns:repeat(2,1fr);}
+  .row.c2{grid-template-columns:1fr;}
+  .hdr-clock{font-size:24px;}
+}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div>
+    <div class="hdr-logo">Palet<span>CD</span></div>
+    <div class="hdr-sub">Paletes enviados às lojas</div>
+  </div>
+  <div class="hdr-periodo" id="periodo">—</div>
+  <div class="hdr-right">
+    <div class="hdr-status"><span class="dot" id="conn"></span><span id="conn-tx">Conectando…</span></div>
+    <div>
+      <div class="hdr-clock" id="clock">--:--:--</div>
+      <div class="hdr-date" id="date">—</div>
+    </div>
+  </div>
+</div>
+
+<div class="progress"><div class="progress-bar" id="prog"></div></div>
+
+<div class="stage" id="stage">
+  <div class="panel on" id="p-boot">
+    <div class="empty">
+      <div class="empty-ic">📺</div>
+      <div class="empty-t">Carregando o mural…</div>
+      <div class="empty-d">Lendo o painel publicado pelo PaletCD.</div>
+    </div>
+  </div>
+</div>
+
+<button class="nav-btn nav-l" id="nav-l" title="Painel anterior">&#8249;</button>
+<button class="nav-btn nav-r" id="nav-r" title="Próximo painel">&#8250;</button>
+<div class="pause-badge" id="pause-badge">⏸ PAUSADO — retoma sozinho</div>
+
+<div class="ftr">
+  <span>📊 <b id="f-mov">—</b> movimentações na base</span>
+  <span>🏪 <b id="f-lojas">—</b> lojas cadastradas</span>
+  <span>🔄 Atualizado em <b id="f-upd">—</b></span>
+  <span>📌 Operação registrada desde <b id="f-ini">—</b></span>
+  <span style="margin-left:auto">Mexa o mouse para navegar · setas &#8592; &#8594; · F tela cheia</span>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// PaletCD — MURAL DE TV
+// ───────────────────────────────────────────────────────
+// ECONOMIA DE COTA — ler antes de mexer:
+// Esta página NUNCA lê 'movs', 'est' ou qualquer coleção grande.
+// Ela escuta UM ÚNICO nó agregado (palet_app/v2/tvDash, ~25 KB),
+// publicado pelo próprio PaletCD com throttle de 3 minutos.
+// Consequências:
+//  • Listener só transfere dados quando o nó muda (não é polling).
+//  • Uma TV ligada 24/7 gasta na casa de 0,15 GB/mês, não dezenas.
+//  • Trocar este listener por leitura de 'movs' estoura a cota do
+//    projeto sozinho. Não faça isso.
+// ═══════════════════════════════════════════════════════
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyD_BE2ocd4_yfAO70SoVrdxEMs-PaPtLRQ",
+  authDomain: "paletecd-v2.firebaseapp.com",
+  databaseURL: "https://paletecd-v2-default-rtdb.firebaseio.com",
+  projectId: "paletecd-v2",
+  storageBucket: "paletecd-v2.firebasestorage.app",
+  messagingSenderId: "743106122178",
+  appId: "1:743106122178:web:08e80bfd703ddc5a81465b"
+};
+const V2_PATH = 'palet_app/v2';
+// Início da operação registrada. Antes disso a base tem retorno sem o
+// envio correspondente, o que jogava toda loja para saldo negativo.
+const INICIO_OPERACAO = '2026-08-17';
+const INICIO_OPERACAO_BR = '17/08/2026';
+const TV_NODE = V2_PATH + '/tvDash';
+const LS_TV = 'paletcd_tv_cache';
+
+const MODELOS = ['PBR','DESCARTAVEL','CHEP','EURO','CHEP_EURO','GAIOLA'];
+const MODELO_LABELS = {
+  PBR:'PBR', DESCARTAVEL:'Descartável', CHEP:'CHEP',
+  EURO:'Euro', CHEP_EURO:'CHEP Euro', GAIOLA:'Gaiola'
+};
+// Cadastro de lojas — usado para exibir o nome junto do dígito.
+// Mantenha em sincronia com o LOJAS_BASE do PaletCD.
+const LOJAS_BASE=[
+  {d:1,n:"Carolina"},{d:2,n:"Ponte Preta"},{d:3,n:"Bonfim"},{d:5,n:"Amoreiras"},
+  {d:6,n:"Americana 1"},{d:9,n:"Tatuapé"},{d:10,n:"Sorocaba 1"},{d:11,n:"Butantã"},
+  {d:12,n:"Ibitirama"},{d:13,n:"Moema"},{d:14,n:"Penha"},{d:15,n:"Santana Pujol"},
+  {d:16,n:"Taquaral"},{d:17,n:"Termal"},{d:19,n:"Morumbi"},{d:21,n:"Centro"},
+  {d:23,n:"Cambuí"},{d:24,n:"Santana Ataliba"},{d:25,n:"Santana Tolle"},{d:26,n:"Sorocaba 2"},
+  {d:29,n:"Mooca"},{d:30,n:"Piracicaba"},{d:31,n:"Sousas"},{d:32,n:"Vila Mariana"},
+  {d:33,n:"Galleria"},{d:34,n:"Anália Franco"},{d:35,n:"São José"},{d:36,n:"Angelica"},
+  {d:37,n:"Teodoro Sampaio"},{d:38,n:"Ribeirão Preto"},{d:39,n:"Interlargos"},{d:40,n:"Market Place"},
+  {d:41,n:"Leopoldina"},{d:42,n:"Santo André"},{d:43,n:"Perdizes"},{d:55,n:"Campo Belo"},
+  {d:56,n:"Vila Mascote"},{d:57,n:"Jundiai Farm"},{d:62,n:"Shop Piracicaba"},{d:63,n:"Shop Jundiai"},
+  {d:64,n:"Alphaville Barueri"},{d:65,n:"Ribeirao 2"},{d:67,n:"São Bernardo"},{d:69,n:"Alphaville"},
+  {d:70,n:"Frigorifico"},{d:71,n:"Apucarana"},{d:72,n:"Shop Tatuapé"},{d:73,n:"Cambui 2"},
+  {d:74,n:"Itaim"},{d:75,n:"Nova Campinas"},{d:76,n:"Santos"},{d:79,n:"Sorocaba 3"},
+  {d:80,n:"Itu"},{d:81,n:"Pamplona"},{d:84,n:"Tatuapé 3"},{d:86,n:"São Jose Do Rio Preto"},
+  {d:87,n:"Itatiba"},{d:88,n:"Cotia"},{d:92,n:"Restaurante"},{d:97,n:"Cd Sumaré"},
+  {d:99,n:"Produção"},{d:100,n:"Cd Brasília"},{d:104,n:"Indaiatuba"},{d:107,n:"Americana 2"},
+  {d:108,n:"Limeira"},{d:120,n:"Ouro Verde"},{d:121,n:"Arborais"},{d:122,n:"Bauru"},
+  {d:123,n:"Nova Cantareira"},{d:127,n:"Franca"},{d:134,n:"Damha"},{d:135,n:"Vila Mariana 2"},
+  {d:136,n:"São Carlos"},{d:139,n:"Itaim Bibi 2"},{d:128,n:"Urbanova"},{d:140,n:"Swiss Park"},
+  {d:141,n:"Rio Claro"},{d:142,n:"Mascote 2"},{d:143,n:"Rio Grande"},{d:144,n:"São Bernardo 2"},
+  {d:145,n:"Embare"},{d:146,n:"Arapanes"},{d:147,n:"Olimpia"},{d:148,n:"Paraiso"},
+  {d:149,n:"Interlagos"},{d:150,n:"Corujas"},{d:151,n:"J Cachoeiras"}
+];
+const LOJA_NOME={}; LOJAS_BASE.forEach(l=>LOJA_NOME[l.d]=l.n);
+function nomeLoja(d){return LOJA_NOME[Number(d)]||("Loja "+d);}
+
+const COR_MOD = ['#2b7fff','#FF9F0A','#34C759','#BF5AF2','#00d9ff','#FF453A'];
+const SETOR_COR = {
+  'REV':'#2b7fff','Mercearia':'#FF9F0A','FLV':'#34C759','Perecível':'#00d9ff',
+  'Produção':'#BF5AF2','Central de Frios':'#7f9bbd','Frigorífico':'#FF453A',
+  'Mercearia Recebimento':'#FFB800','Mercearia Expedição':'#e67e22',
+  'FLV Recebimento':'#27ae60','FLV Expedição':'#16a085',
+  'Perecível Recebimento':'#4a9eff','Perecível Expedição':'#1abc9c'
+};
+
+// ── PARÂMETROS DE URL ──────────────────────────────────
+// ?p=mes|d30|total   período exibido      (padrão: mes)
+// ?t=20              segundos por painel  (padrão: 20)
+// ?fix=2             trava em um painel   (1..4)
+// ?debug=1           mostra o cursor
+const Q = new URLSearchParams(location.search);
+const PERIODO = ['mes','d30','total'].includes(Q.get('p')) ? Q.get('p') : 'mes';
+const SEG = Math.max(6, Number(Q.get('t')) || 20);
+const FIXO = Number(Q.get('fix')) || 0;
+if(Q.get('debug')==='1') document.body.classList.add('debug');
+
+const TZ='America/Sao_Paulo';
+function _p(){
+  const f=new Intl.DateTimeFormat('pt-BR',{timeZone:TZ,year:'numeric',month:'2-digit',
+    day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+  const o={}; f.formatToParts(new Date()).forEach(x=>{if(x.type!=='literal')o[x.type]=x.value;});
+  if(o.hour==='24')o.hour='00';
+  return o;
+}
+const nf = n => (Number(n)||0).toLocaleString('pt-BR');
+
+// ── RELÓGIO ────────────────────────────────────────────
+const DIAS=['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+const MESES=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+function tick(){
+  const p=_p();
+  document.getElementById('clock').textContent=`${p.hour}:${p.minute}:${p.second}`;
+  const d=new Date(+p.year,+p.month-1,+p.day);
+  document.getElementById('date').textContent=`${DIAS[d.getDay()]}, ${+p.day} de ${MESES[+p.month-1]}`;
+}
+tick(); setInterval(tick,1000);
+
+// ── FIREBASE ───────────────────────────────────────────
+let db=null, DADOS=null;
+
+function setConn(estado,txt){
+  const d=document.getElementById('conn');
+  d.className='dot'+(estado==='on'?' on':estado==='off'?' off':'');
+  document.getElementById('conn-tx').textContent=txt;
+}
+
+function boot(){
+  try{
+    if(!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+    db=firebase.database();
+    firebase.auth().signInAnonymously().catch(e=>{
+      console.warn('Auth anônimo indisponível, seguindo sem auth:',e&&e.code);
+    }).finally(ouvir);
+  }catch(e){
+    console.error('Erro ao iniciar Firebase:',e);
+    setConn('off','Sem conexão');
+    renderVazio('Não foi possível conectar ao Firebase.');
+  }
+}
+
+function ouvir(){
+  // ÚNICO listener da página. Nó pequeno, transfere só quando muda.
+  db.ref(TV_NODE).on('value', snap=>{
+    const v=snap.val();
+    if(!v){ setConn('on','Sem painel publicado'); renderVazio(); return; }
+    DADOS=v;
+    try{ localStorage.setItem(LS_TV, JSON.stringify(v)); }catch(e){}
+    setConn('on','Ao vivo');
+    render();
+  }, err=>{
+    console.warn('Listener caiu:',err);
+    setConn('off','Reconectando…');
+  });
+
+  db.ref('.info/connected').on('value',s=>{
+    if(s.val()) setConn('on','Ao vivo');
+    else setConn('off','Reconectando…');
+  });
+}
+
+// Cache local: a TV volta a exibir na hora após queda de energia,
+// sem esperar a rede — e sem baixar nada de novo.
+try{
+  const c=localStorage.getItem(LS_TV);
+  if(c){ DADOS=JSON.parse(c); }
+}catch(e){}
+
+// ── TELA DE ESPERA ─────────────────────────────────────
+function renderVazio(msg){
+  document.getElementById('stage').innerHTML=`
+  <div class="panel on">
+    <div class="empty">
+      <div class="empty-ic">📭</div>
+      <div class="empty-t">${msg||'Nenhum painel publicado ainda'}</div>
+      <div class="empty-d">
+        O mural lê um resumo que o PaletCD publica sozinho. Basta abrir o PaletCD
+        e registrar qualquer movimentação — em até 3 minutos o painel aparece aqui.
+      </div>
+      <button class="empty-btn" id="btn-gerar" onclick="gerarAgora(this)">Gerar o painel agora</button>
+      <div class="empty-warn">
+        Só use este botão no primeiro uso. Ele lê o histórico completo de
+        movimentações uma única vez para montar o resumo inicial.
+      </div>
+    </div>
+  </div>`;
+}
+
+// Fallback de uso único: monta o primeiro snapshot lendo 'movs'.
+// É a ÚNICA situação em que esta página toca numa coleção grande.
+let _gerando=false;
+async function gerarAgora(alvo){
+  if(_gerando||!db)return;
+  _gerando=true;
+  const b=alvo||document.getElementById('btn-gerar');
+  const txtOrig=b?(b.textContent||''):'';
+  if(b){b.style.pointerEvents='none';b.textContent='⏳ Recalculando…';}
+  try{
+    // Única leitura pesada desta página, e só sob ação manual.
+    const snap=await db.ref(V2_PATH+'/movs').once('value');
+    const movs=Object.values(snap.val()||{}).filter(x=>x&&typeof x==='object');
+    await db.ref(TV_NODE).set(montar(movs));
+    console.log('✓ Painel publicado a partir de',movs.length,'movimentações');
+    // O listener devolve o painel novo e o render refaz o cabeçalho.
+  }catch(e){
+    console.error('Falha ao gerar:',e);
+    if(b){b.style.pointerEvents='';b.textContent='⚠ Falhou — clique para tentar de novo';}
+  }finally{
+    _gerando=false;
+    setTimeout(()=>{ if(b&&b.textContent.indexOf('Recalculando')>=0) b.textContent=txtOrig; },8000);
+  }
+}
+
+function parseTs(ts){
+  try{
+    const[dp,tp]=(ts||'').split(', ');
+    const[d,m,y]=dp.split('/');
+    const[h,mi]=(tp||'00:00').split(':');
+    return new Date(y,m-1,d,h,mi);
+  }catch(e){return null;}
+}
+function visao(movs,de,ate){
+  const dI=de?new Date(de+'T00:00:00'):null, dF=ate?new Date(ate+'T23:59:59'):null;
+  const map={}, setores={}, modelos={};
+  MODELOS.forEach(m=>modelos[m]=0);
+  movs.forEach(m=>{
+    if(m.tipo!=='Envio para Loja'&&m.tipo!=='Retorno de Loja')return;
+    if(!m.loja)return;
+    const d=parseTs(m.ts);
+    if(!d||isNaN(d.getTime())||d.getFullYear()<2000)return;
+    if(dI&&d<dI)return;
+    if(dF&&d>dF)return;
+    const k=Number(m.loja);
+    if(!map[k])map[k]={n:nomeLoja(k),d:k,e:0,r:0};
+    if(m.tipo==='Envio para Loja'){
+      map[k].e+=(m.qtd||0);
+      const s=m.origem||'REV';
+      setores[s]=(setores[s]||0)+(m.qtd||0);
+      MODELOS.forEach(x=>modelos[x]+=(m.modelos&&m.modelos[x])||0);
+    } else map[k].r+=(m.qtd||0);
+  });
+  const lojas=Object.values(map).map(l=>({...l,s:l.e-l.r})).sort((a,b)=>b.s-a.s);
+  return{lojas,setores,modelos,
+    env:lojas.reduce((s,l)=>s+l.e,0), ret:lojas.reduce((s,l)=>s+l.r,0)};
+}
+function piso(de){ return (!de||de<INICIO_OPERACAO)?INICIO_OPERACAO:de; }
+function montar(movs){
+  const p=_p(), h=new Date(+p.year,+p.month-1,+p.day);
+  const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const i30=new Date(h); i30.setDate(i30.getDate()-29);
+  const iM=new Date(h.getFullYear(),h.getMonth(),1);
+  return{
+    atualizadoEm:`${p.day}/${p.month}/${p.year}, ${p.hour}:${p.minute}:${p.second}`,
+    epoch:Date.now(), totalMovs:movs.length, lojasCadastradas:LOJAS_BASE.length,
+    inicioOperacao:INICIO_OPERACAO_BR,
+    visoes:{
+      mes:{rotulo:`Desde ${INICIO_OPERACAO_BR}`,...visao(movs,piso(iso(iM)),iso(h))},
+      d30:{rotulo:`Desde ${INICIO_OPERACAO_BR}`,...visao(movs,piso(iso(i30)),iso(h))},
+      total:{rotulo:`Desde ${INICIO_OPERACAO_BR}`,...visao(movs,INICIO_OPERACAO,iso(h))}
+    }
+  };
+}
+
+// ── COMPONENTES ────────────────────────────────────────
+// O snapshot ja traz o nome, mas painel antigo (ou loja fora do
+// cadastro) pode trazer so o numero. Aqui o nome sempre vence.
+function nome(it){
+  const n=(it.n==null?'':String(it.n)).trim();
+  if(n && !/^[0-9]+$/.test(n)) return n;
+  return nomeLoja(it.d!=null?it.d:n);
+}
+
+function barras(items,valFn,corFn,vazio){
+  if(!items.length)
+    return `<div class="empty" style="flex:1"><div class="empty-d">${vazio||'Sem movimento no período'}</div></div>`;
+  const max=Math.max(...items.map(i=>Math.abs(valFn(i))),1);
+  return `<div class="bars">`+items.map((it,i)=>{
+    const v=valFn(it), w=Math.max(2,Math.round(Math.abs(v)/max*100));
+    return `<div class="bar">
+      <div class="bar-pos">${i+1}</div>
+      <div class="bar-d">${String(it.d==null?'—':it.d).padStart(3,'0')}</div>
+      <div class="bar-n" title="${nome(it)}">${nome(it)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${corFn(it,i)}"></div></div>
+      <div class="bar-v${v<0?' neg':''}">${nf(v)}</div>
+    </div>`;
+  }).join('')+`</div>`;
+}
+
+function donut(items,total){
+  if(!items.length||!total)
+    return `<div class="empty" style="flex:1"><div class="empty-d">Sem dados no período</div></div>`;
+  const cx=110,cy=110,R=92,r=56;
+  let a=-Math.PI/2;
+  const paths=items.map(it=>{
+    const pct=it.val/total, a1=a, a2=a+pct*2*Math.PI; a=a2;
+    // círculo completo não fecha com arco: desenha dois anéis
+    if(pct>=0.9999)
+      return `<circle cx="${cx}" cy="${cy}" r="${(R+r)/2}" fill="none" stroke="${it.cor}" stroke-width="${R-r}"/>`;
+    const P=(ra,an)=>[cx+ra*Math.cos(an),cy+ra*Math.sin(an)];
+    const[x1,y1]=P(R,a1),[x2,y2]=P(R,a2),[x3,y3]=P(r,a2),[x4,y4]=P(r,a1);
+    const lg=pct>0.5?1:0;
+    return `<path d="M${x1},${y1} A${R},${R},0,${lg},1,${x2},${y2} L${x3},${y3} A${r},${r},0,${lg},0,${x4},${y4} Z"
+      fill="${it.cor}" stroke="#0d2039" stroke-width="2"/>`;
+  }).join('');
+  const leg=items.map(it=>`<div class="leg-i">
+    <div class="leg-c" style="background:${it.cor}"></div>
+    <div class="leg-n">${it.label}</div>
+    <div class="leg-q">${nf(it.val)}</div>
+    <div class="leg-p">${(it.val/total*100).toFixed(1)}%</div>
+  </div>`).join('');
+  return `<div class="donut-wrap">
+    <svg width="220" height="220" viewBox="0 0 220 220">${paths}
+      <text x="110" y="104" text-anchor="middle" fill="#eaf3ff" font-size="30" font-family="DM Mono,monospace" font-weight="700">${nf(total)}</text>
+      <text x="110" y="126" text-anchor="middle" fill="#5f7ea5" font-size="12" font-family="DM Sans,sans-serif" letter-spacing="2">TOTAL</text>
+    </svg>
+    <div class="leg">${leg}</div>
+  </div>`;
+}
+
+// ── RENDER ─────────────────────────────────────────────
+function render(){
+  if(!DADOS||!DADOS.visoes)return renderVazio();
+  const V=DADOS.visoes[PERIODO]||DADOS.visoes.mes;
+  if(!V)return renderVazio();
+
+  const lojas=(V.lojas||[]);
+  const env=V.env||0, ret=V.ret||0, saldo=env-ret;
+  const neg=lojas.filter(l=>l.s<0).sort((a,b)=>a.s-b.s);
+  const pos=lojas.filter(l=>l.s>0);
+  const taxa=env>0?Math.round(ret/env*100):0;
+  const excedente=ret-env;
+  // Acima de 100% na transição = palete anterior a 17/08 voltando.
+  // Não é meta batida nem falha, então não pinta de verde nem de vermelho.
+  const corTaxa=taxa>110?'':taxa>=70?'green':taxa>=40?'amber':'red';
+  const subTaxa=taxa>110
+    ? `${nf(excedente)} a mais do que saiu — passivo anterior voltando`
+    : `${nf(ret)} de ${nf(env)} enviados`;
+
+  document.getElementById('periodo').textContent=V.rotulo||'—';
+  document.getElementById('f-mov').textContent=nf(DADOS.totalMovs);
+  document.getElementById('f-lojas').textContent=DADOS.lojasCadastradas?nf(DADOS.lojasCadastradas):'—';
+  document.getElementById('f-upd').textContent=DADOS.atualizadoEm||'—';
+  document.getElementById('f-ini').textContent=DADOS.inicioOperacao||INICIO_OPERACAO_BR;
+
+  // Painel publicado por versão anterior ao corte: sinaliza em vez de
+  // exibir número desatualizado como se fosse o atual.
+  const desatualizado = !DADOS.inicioOperacao;
+  const per=document.getElementById('periodo');
+  if(desatualizado){
+    // Clicável: a TV não fica refém de alguém abrir o app para republicar.
+    per.innerHTML='⚠ '+(V.rotulo||'—')+' · painel antigo — clique para atualizar';
+    per.style.borderColor='var(--amber)';
+    per.style.background='rgba(255,184,0,.14)';
+    per.style.color='var(--amber)';
+    per.style.cursor='pointer';
+    per.onclick=()=>gerarAgora(per);
+  }else{
+    per.style.borderColor='';per.style.background='';per.style.color='';
+    per.style.cursor='';per.onclick=null;
+    per.textContent=V.rotulo||'—';
+  }
+
+  const AZ=['#2b7fff','#3d8bff','#4f97ff','#61a3ff','#73afff','#85bbff','#97c7ff','#a9d3ff','#bbdfff','#cdebff'];
+  const VD=['#34C759','#4bd06b','#62d97d','#79e28f','#90eba1','#a7f4b3','#b4f7bf','#c1facb','#cefdd7','#dbffe3'];
+  const LA=['#FF9F0A','#ffad2e','#ffbb52','#ffc976','#ffd79a','#ffe0b0','#ffe7c2','#ffeed4','#fff2de','#fff6e8'];
+  const VM=['#FF453A','#ff5f55','#ff7970','#ff938b','#ffada6','#ffc0bb','#ffd0cc','#ffdfdc','#ffe9e7','#fff2f1'];
+
+  const setItemsRank=Object.entries(V.setores||{})
+    .map(([k,v])=>({label:k,val:v,cor:SETOR_COR[k]||'#7f9bbd'}))
+    .filter(x=>x.val>0).sort((a,b)=>b.val-a.val).slice(0,8);
+  const totSetRank=setItemsRank.reduce((s,i)=>s+i.val,0);
+  const modItemsRank=MODELOS.map((m,i)=>({label:MODELO_LABELS[m],val:(V.modelos||{})[m]||0,cor:COR_MOD[i]}))
+    .filter(x=>x.val>0).sort((a,b)=>b.val-a.val);
+  const totModRank=modItemsRank.reduce((s,i)=>s+i.val,0);
+
+  const paineis=[];
+
+  // 1 — VISAO GERAL (somente cards)
+  paineis.push(`
+  <div class="panel" data-i="0">
+    <div class="panel-title">Visão geral · ${V.rotulo}</div>
+    <div class="kpis kpis-hero">
+      <div class="kpi">
+        <div class="kpi-l">Enviado</div>
+        <div class="kpi-v">${nf(env)}</div>
+        <div class="kpi-s">saíram do CD</div>
+      </div>
+      <div class="kpi amber">
+        <div class="kpi-l">Retornado</div>
+        <div class="kpi-v">${nf(ret)}</div>
+        <div class="kpi-s">voltaram das lojas</div>
+      </div>
+      <div class="kpi teal">
+        <div class="kpi-l">Saldo do período</div>
+        <div class="kpi-v">${nf(saldo)}</div>
+        <div class="kpi-s">${saldo<0?'voltou mais do que saiu':'enviado menos retornado'}</div>
+      </div>
+      <div class="kpi ${corTaxa}">
+        <div class="kpi-l">Taxa de retorno</div>
+        <div class="kpi-v">${taxa}%</div>
+        <div class="kpi-s">${subTaxa}</div>
+      </div>
+      <div class="kpi ${pos.length?'green':'red'}">
+        <div class="kpi-l">Lojas no ciclo normal</div>
+        <div class="kpi-v">${nf(pos.length)}</div>
+        <div class="kpi-s">saldo positivo · ${nf(neg.length)} ainda negativas</div>
+      </div>
+      <div class="kpi purple">
+        <div class="kpi-l">Lojas com movimento</div>
+        <div class="kpi-v">${nf(lojas.length)}</div>
+        <div class="kpi-s">de ${DADOS.lojasCadastradas?nf(DADOS.lojasCadastradas):LOJAS_BASE.length} cadastradas</div>
+      </div>
+    </div>
+  </div>`);
+
+  // 2 — ENVIO x RETORNO
+  const topE=[...lojas].sort((a,b)=>b.e-a.e).slice(0,8);
+  const topR=[...lojas].sort((a,b)=>b.r-a.r).slice(0,8);
+  paineis.push(`
+  <div class="panel" data-i="1">
+    <div class="panel-title">Movimento por loja · ${V.rotulo}</div>
+    <div class="row c2">
+      <div class="card">
+        <div class="card-t">📤 Mais receberam do CD <em>top 8</em></div>
+        ${barras(topE,l=>l.e,(l,i)=>VD[i]||VD[7])}
+      </div>
+      <div class="card">
+        <div class="card-t">📥 Mais devolveram ao CD <em>top 8</em></div>
+        ${barras(topR,l=>l.r,(l,i)=>LA[i]||LA[7])}
+      </div>
+
+
+    </div>
+  </div>`);
+
+  // 3 — PARTICIPAÇÃO
+  paineis.push(`
+  <div class="panel" data-i="2">
+    <div class="panel-title">Participação · ${V.rotulo}</div>
+    <div class="row c2">
+      <div class="card"><div class="card-t">🏭 Setores que enviaram</div>${donut(setItemsRank,totSetRank)}</div>
+      <div class="card"><div class="card-t">📦 Modelos enviados</div>${donut(modItemsRank,totModRank)}</div>
+    </div>
+  </div>`);
+
+  // 4 — ATENÇÃO (só entra na rotação se houver caso)
+  if(neg.length){
+    paineis.push(`
+    <div class="panel" data-i="3">
+      <div class="panel-title">Atenção · saldo negativo</div>
+      <div class="kpis" style="grid-template-columns:repeat(3,1fr)">
+        <div class="kpi red"><div class="kpi-l">Lojas negativas</div><div class="kpi-v">${nf(neg.length)}</div><div class="kpi-s">devolveram mais do que receberam</div></div>
+        <div class="kpi red"><div class="kpi-l">Paletes sem rastro</div><div class="kpi-v">${nf(Math.abs(neg.reduce((s,l)=>s+l.s,0)))}</div><div class="kpi-s">retorno sem envio registrado</div></div>
+        <div class="kpi purple"><div class="kpi-l">Lojas com movimento</div><div class="kpi-v">${nf(lojas.length)}</div><div class="kpi-s">no período</div></div>
+      </div>
+      <div class="card" style="flex:1">
+        <div class="card-t">⚠️ Retorno sem envio correspondente <em>top 10</em></div>
+        ${barras(neg.slice(0,10),l=>l.s,(l,i)=>VM[i]||VM[9])}
+      </div>
+    </div>`);
+  }
+
+  const stage=document.getElementById('stage');
+  stage.innerHTML=paineis.join('')+
+    `<div class="dots">${paineis.map((_,i)=>`<div class="pdot" data-d="${i}"></div>`).join('')}</div>`;
+  TOTAL=paineis.length;
+  if(IDX>=TOTAL)IDX=0;
+  mostrar(IDX);
+}
+
+// ── ROTAÇÃO E NAVEGAÇÃO ────────────────────────────────
+// A TV gira sozinha, mas quem estiver na frente dela precisa poder
+// parar e olhar. Qualquer navegação manual pausa o giro; depois de
+// PAUSA_S sem ninguém tocar, ela volta a girar por conta própria.
+let IDX=0, TOTAL=1, t0=0, rafId=null;
+let pausado=false, pausaT=null, idleT=null;
+const PAUSA_S = 90;
+
+function mostrar(i){
+  const ps=document.querySelectorAll('.panel');
+  if(!ps.length)return;
+  ps.forEach(p=>p.classList.remove('on'));
+  if(ps[i])ps[i].classList.add('on');
+  document.querySelectorAll('.pdot').forEach((d,j)=>d.classList.toggle('on',j===i));
+  t0=performance.now();
+}
+
+function irPara(i,manual){
+  if(!TOTAL)return;
+  IDX=((i%TOTAL)+TOTAL)%TOTAL;
+  mostrar(IDX);
+  if(manual)pausar();
+}
+const proximo  = manual => irPara(IDX+1, manual);
+const anterior = manual => irPara(IDX-1, manual);
+
+function pausar(){
+  pausado=true;
+  document.getElementById('pause-badge').classList.add('on');
+  const b=document.getElementById('prog'); if(b)b.style.width='0%';
+  clearTimeout(pausaT);
+  pausaT=setTimeout(retomar, PAUSA_S*1000);
+}
+function retomar(){
+  pausado=false;
+  document.getElementById('pause-badge').classList.remove('on');
+  clearTimeout(pausaT);
+  t0=performance.now();
+}
+function alternarPausa(){ pausado?retomar():pausar(); }
+
+// Cursor e controles somem após 3s parados — modo TV limpo,
+// mas sem prender quem precisa navegar.
+function acordar(){
+  document.body.classList.remove('idle');
+  clearTimeout(idleT);
+  idleT=setTimeout(()=>document.body.classList.add('idle'),3000);
+}
+['mousemove','mousedown','touchstart','keydown','wheel']
+  .forEach(ev=>document.addEventListener(ev,acordar,{passive:true}));
+acordar();
+
+function loop(now){
+  if(!pausado && !FIXO && TOTAL>1){
+    const pct=Math.min(100,(now-t0)/(SEG*1000)*100);
+    const b=document.getElementById('prog');
+    if(b)b.style.width=pct+'%';
+    if(pct>=100) proximo(false);
+  }
+  rafId=requestAnimationFrame(loop);
+}
+
+// Setas laterais
+document.getElementById('nav-l').addEventListener('click',e=>{e.stopPropagation();anterior(true);});
+document.getElementById('nav-r').addEventListener('click',e=>{e.stopPropagation();proximo(true);});
+
+// Bolinhas: o stage é recriado a cada render, então delega no document
+document.addEventListener('click',e=>{
+  const d=e.target.closest('.pdot');
+  if(d){ irPara(Number(d.dataset.d)||0,true); return; }
+  // Clique/toque no painel: metade direita avança, esquerda volta.
+  // Útil em TV com touch ou controle que emula clique.
+  if(e.target.closest('.stage')){
+    (e.clientX > window.innerWidth/2 ? proximo : anterior)(true);
+  }
+});
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'){e.preventDefault();proximo(true);}
+  else if(e.key==='ArrowLeft'){e.preventDefault();anterior(true);}
+  else if(e.key===' '){e.preventDefault();alternarPausa();}
+  else if(e.key>='1'&&e.key<='9'){irPara(Number(e.key)-1,true);}
+  else if(e.key==='f'||e.key==='F'){
+    if(document.fullscreenElement)document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  }
+  else if(e.key==='r'||e.key==='R')location.reload();
+});
+
+if(FIXO){ IDX=Math.max(0,Math.min(FIXO-1,3)); }
+t0=performance.now();
+rafId=requestAnimationFrame(loop);
+
+// Recarrega de madrugada: evita acúmulo de memória em TV que
+// nunca é desligada, e pega qualquer versão nova do arquivo.
+setInterval(()=>{
+  const p=_p();
+  if(p.hour==='04'&&p.minute==='10'&&p.second<'05') location.reload();
+},4000);
+
+if(DADOS)render();
+boot();
+console.log('%cPaletCD TV — período: '+PERIODO+' · '+SEG+'s por painel','color:#00d9ff;font-weight:bold');
+</script>
+</body>
+</html>
