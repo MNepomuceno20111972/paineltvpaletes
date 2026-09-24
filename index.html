@@ -82,6 +82,34 @@ body.idle .nav-btn,body.idle .pause-badge{opacity:0;pointer-events:none;}
 .dot.off{background:var(--red);box-shadow:0 0 12px var(--red);}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
+/* ── FILTRO DE DATA ───────────────── */
+.filtro{position:relative;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.fchip{
+  background:rgba(18,42,71,.7);border:1px solid var(--line);color:var(--tx2);
+  border-radius:8px;padding:6px 12px;font:600 13px var(--font);cursor:pointer;
+  white-space:nowrap;transition:background .2s,border-color .2s,color .2s;
+}
+.fchip:hover{border-color:var(--navy);color:var(--tx);}
+.fchip.on{background:var(--navy);border-color:var(--navy);color:#fff;}
+.fpop{
+  position:absolute;top:calc(100% + 10px);right:0;z-index:80;
+  background:var(--bg2);border:1px solid var(--navy);border-radius:12px;
+  padding:14px 14px 28px;display:none;gap:10px;align-items:flex-end;
+  box-shadow:0 12px 40px rgba(0,0,0,.5);
+}
+.fpop.on{display:flex;}
+.fpop label{display:flex;flex-direction:column;gap:4px;font-size:11px;
+  letter-spacing:1px;text-transform:uppercase;color:var(--tx3);}
+.fpop input{
+  background:var(--card);border:1px solid var(--line);color:var(--tx);
+  border-radius:8px;padding:7px 10px;font:500 14px var(--mono);color-scheme:dark;
+}
+.fpop button{
+  background:var(--teal);border:0;color:#071426;border-radius:8px;
+  padding:9px 16px;font:700 13px var(--font);cursor:pointer;
+}
+.fpop .ferr{position:absolute;left:14px;bottom:8px;font-size:12px;color:var(--amber);}
+
 /* ── PROGRESSO DA ROTAÇÃO ─────────── */
 .progress{height:3px;background:rgba(255,255,255,.06);flex-shrink:0;}
 .progress-bar{height:100%;background:linear-gradient(90deg,var(--navy),var(--teal));width:0%;}
@@ -242,6 +270,20 @@ body.idle .nav-btn,body.idle .pause-badge{opacity:0;pointer-events:none;}
     <div class="hdr-sub">Paletes enviados às lojas</div>
   </div>
   <div class="hdr-periodo" id="periodo">—</div>
+  <div class="filtro" id="filtro">
+    <button class="fchip" data-f="hoje">Hoje</button>
+    <button class="fchip" data-f="ontem">Ontem</button>
+    <button class="fchip" data-f="d7">7 dias</button>
+    <button class="fchip" data-f="mes">Mês</button>
+    <button class="fchip" data-f="total">Total</button>
+    <button class="fchip" data-f="livre" id="fchip-livre">📅 Período</button>
+    <div class="fpop" id="fpop">
+      <label>De<input type="date" id="f-de"></label>
+      <label>Até<input type="date" id="f-ate"></label>
+      <button id="f-ok">Aplicar</button>
+      <span class="ferr" id="f-err"></span>
+    </div>
+  </div>
   <div class="hdr-right">
     <div class="hdr-status"><span class="dot" id="conn"></span><span id="conn-tx">Conectando…</span></div>
     <div>
@@ -304,7 +346,12 @@ const V2_PATH = 'palet_app/v2';
 const INICIO_OPERACAO = '2026-08-17';
 const INICIO_OPERACAO_BR = '17/08/2026';
 const TV_NODE = V2_PATH + '/tvDash';
+// v40: resumo por dia publicado pelo PaletCD (tvDias/AAAA-MM-DD).
+// Escutado por child_*: só o dia que mudou trafega.
+const TV_DIAS = V2_PATH + '/tvDias';
 const LS_TV = 'paletcd_tv_cache_bc9a9';
+const LS_DIAS = 'paletcd_tv_dias_bc9a9';
+const LS_FILTRO = 'paletcd_tv_filtro';
 try{ localStorage.removeItem('paletcd_tv_cache'); }catch(e){}
 
 const MODELOS = ['PBR','DESCARTAVEL','CHEP','EURO','CHEP_EURO','GAIOLA'];
@@ -351,12 +398,12 @@ const SETOR_COR = {
 };
 
 // ── PARÂMETROS DE URL ──────────────────────────────────
-// ?p=mes|d30|total   período exibido      (padrão: mes)
+// ?p=hoje|ontem|d7|mes|d30|total   período inicial (padrão: último usado, senão mes)
+// ?de=2026-09-01&ate=2026-09-15     período livre
 // ?t=20              segundos por painel  (padrão: 20)
 // ?fix=2             trava em um painel   (1..4)
 // ?debug=1           mostra o cursor
 const Q = new URLSearchParams(location.search);
-const PERIODO = ['mes','d30','total'].includes(Q.get('p')) ? Q.get('p') : 'mes';
 const SEG = Math.max(6, Number(Q.get('t')) || 20);
 const FIXO = Number(Q.get('fix')) || 0;
 if(Q.get('debug')==='1') document.body.classList.add('debug');
@@ -371,19 +418,117 @@ function _p(){
 }
 const nf = n => (Number(n)||0).toLocaleString('pt-BR');
 
+// ── FILTRO DE DATA ─────────────────────────────────────
+const FIXOS = ['hoje','ontem','d7','mes','d30','total'];
+const reISO = /^\d{4}-\d{2}-\d{2}$/;
+let FILTRO = null;
+(function(){
+  const de=Q.get('de'), ate=Q.get('ate'), p=Q.get('p');
+  if(de && reISO.test(de)) FILTRO={id:'livre', de, ate:(ate&&reISO.test(ate))?ate:de};
+  else if(FIXOS.includes(p)) FILTRO={id:p};
+  if(!FILTRO){ try{ FILTRO=JSON.parse(localStorage.getItem(LS_FILTRO)); }catch(e){} }
+  if(!FILTRO || !(FIXOS.includes(FILTRO.id) || (FILTRO.id==='livre'&&reISO.test(FILTRO.de||''))))
+    FILTRO={id:'mes'};
+})();
+
+function isoD(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+function hojeISO(){const p=_p();return `${p.year}-${p.month}-${p.day}`;}
+function addDias(iso,n){const[y,m,d]=iso.split('-').map(Number);return isoD(new Date(y,m-1,d+n));}
+function brC(iso){const[,m,d]=iso.split('-');return `${d}/${m}`;}
+function brL(iso){const[y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
+
+// Converte o filtro em datas reais e no rótulo mostrado na TV
+function intervalo(F){
+  const h=hojeISO();
+  let de, ate=h, nome;
+  switch(F.id){
+    case 'hoje':  de=h; nome='Hoje'; break;
+    case 'ontem': de=ate=addDias(h,-1); nome='Ontem'; break;
+    case 'd7':    de=addDias(h,-6); nome='Últimos 7 dias'; break;
+    case 'd30':   de=addDias(h,-29); nome='Últimos 30 dias'; break;
+    case 'total': de=INICIO_OPERACAO; nome='Total'; break;
+    case 'livre': de=F.de; ate=F.ate||F.de; nome=null; break;
+    default:      de=h.slice(0,8)+'01'; nome='Mês atual';
+  }
+  if(de>ate)[de,ate]=[ate,de];
+  if(de<INICIO_OPERACAO) de=INICIO_OPERACAO;   // antes disso não há dado válido
+  const faixa = de===ate ? brL(de) : `${brC(de)} a ${brL(ate)}`;
+  const rotulo = F.id==='total' ? `Total · desde ${INICIO_OPERACAO_BR}`
+               : nome ? `${nome} · ${faixa}` : `Período · ${faixa}`;
+  return {de, ate, rotulo};
+}
+
+function setFiltro(F){
+  FILTRO=F;
+  try{ localStorage.setItem(LS_FILTRO, JSON.stringify(F)); }catch(e){}
+  fecharPop();
+  IDX=0;
+  render();
+}
+
+function pintarFiltro(){
+  document.querySelectorAll('.fchip').forEach(b=>b.classList.toggle('on', b.dataset.f===FILTRO.id));
+  const L=document.getElementById('fchip-livre');
+  if(FILTRO.id==='livre'){
+    const I=intervalo(FILTRO);
+    L.textContent = '📅 ' + (I.de===I.ate ? brC(I.de) : `${brC(I.de)} a ${brC(I.ate)}`);
+  } else L.textContent='📅 Período';
+}
+
+function abrirPop(){
+  const I=intervalo(FILTRO), h=hojeISO();
+  const de=document.getElementById('f-de'), ate=document.getElementById('f-ate');
+  [de,ate].forEach(x=>{x.min=INICIO_OPERACAO; x.max=h;});
+  de.value=I.de; ate.value=I.ate;
+  document.getElementById('f-err').textContent='';
+  document.getElementById('fpop').classList.add('on');
+  pausar();
+}
+function fecharPop(){ document.getElementById('fpop').classList.remove('on'); }
+
+function aplicarLivre(){
+  let de=document.getElementById('f-de').value, ate=document.getElementById('f-ate').value;
+  const err=document.getElementById('f-err');
+  if(!reISO.test(de)){ err.textContent='Informe a data inicial.'; return; }
+  if(!reISO.test(ate)) ate=de;
+  if(de>ate)[de,ate]=[ate,de];
+  if(ate<INICIO_OPERACAO){ err.textContent=`Sem dados antes de ${INICIO_OPERACAO_BR}.`; return; }
+  setFiltro({id:'livre', de, ate});
+}
+
+document.getElementById('filtro').addEventListener('click',e=>{
+  e.stopPropagation();
+  const b=e.target.closest('.fchip');
+  if(!b) return;
+  if(b.dataset.f==='livre'){
+    document.getElementById('fpop').classList.contains('on') ? fecharPop() : abrirPop();
+  } else setFiltro({id:b.dataset.f});
+});
+document.getElementById('f-ok').addEventListener('click',aplicarLivre);
+['f-de','f-ate'].forEach(id=>document.getElementById(id)
+  .addEventListener('keydown',e=>{ if(e.key==='Enter') aplicarLivre(); }));
+
 // ── RELÓGIO ────────────────────────────────────────────
-const DIAS=['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+const DIAS_SEMANA=['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
 const MESES=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 function tick(){
   const p=_p();
   document.getElementById('clock').textContent=`${p.hour}:${p.minute}:${p.second}`;
   const d=new Date(+p.year,+p.month-1,+p.day);
-  document.getElementById('date').textContent=`${DIAS[d.getDay()]}, ${+p.day} de ${MESES[+p.month-1]}`;
+  document.getElementById('date').textContent=`${DIAS_SEMANA[d.getDay()]}, ${+p.day} de ${MESES[+p.month-1]}`;
 }
 tick(); setInterval(tick,1000);
 
 // ── FIREBASE ───────────────────────────────────────────
-let db=null, DADOS=null;
+let db=null, DADOS=null, DIAS={};
+try{ DIAS=JSON.parse(localStorage.getItem(LS_DIAS))||{}; }catch(e){ DIAS={}; }
+const temDias = () => Object.keys(DIAS).length>0;
+let _rT=null, _cT=null;
+function agendarRender(){ clearTimeout(_rT); _rT=setTimeout(render,300); }
+function salvarDias(){
+  clearTimeout(_cT);
+  _cT=setTimeout(()=>{ try{ localStorage.setItem(LS_DIAS, JSON.stringify(DIAS)); }catch(e){} },2000);
+}
 
 function setConn(estado,txt){
   const d=document.getElementById('conn');
@@ -409,7 +554,7 @@ function ouvir(){
   // ÚNICO listener da página. Nó pequeno, transfere só quando muda.
   db.ref(TV_NODE).on('value', snap=>{
     const v=snap.val();
-    if(!v){ setConn('on','Sem painel publicado'); renderVazio(); return; }
+    if(!v){ setConn('on','Sem painel publicado'); DADOS=null; temDias()?render():renderVazio(); return; }
     DADOS=v;
     try{ localStorage.setItem(LS_TV, JSON.stringify(v)); }catch(e){}
     setConn('on','Ao vivo');
@@ -418,6 +563,13 @@ function ouvir(){
     console.warn('Listener caiu:',err);
     setConn('off','Reconectando…');
   });
+
+  // Resumo diário: no 1º carregamento vem tudo uma vez; depois,
+  // só o dia que mudou.
+  const rd=db.ref(TV_DIAS);
+  rd.on('child_added',  s=>{ DIAS[s.key]=s.val(); salvarDias(); agendarRender(); });
+  rd.on('child_changed',s=>{ DIAS[s.key]=s.val(); salvarDias(); agendarRender(); });
+  rd.on('child_removed',s=>{ delete DIAS[s.key]; salvarDias(); agendarRender(); });
 
   db.ref('.info/connected').on('value',s=>{
     if(s.val()) setConn('on','Ao vivo');
@@ -466,6 +618,7 @@ async function gerarAgora(alvo){
     const snap=await db.ref(V2_PATH+'/movs').once('value');
     const movs=Object.values(snap.val()||{}).filter(x=>x&&typeof x==='object');
     await db.ref(TV_NODE).set(montar(movs));
+    await db.ref(TV_DIAS).set(montarDias(movs));
     console.log('✓ Painel publicado a partir de',movs.length,'movimentações');
     // O listener devolve o painel novo e o render refaz o cabeçalho.
   }catch(e){
@@ -509,6 +662,84 @@ function visao(movs,de,ate){
   return{lojas,setores,modelos,
     env:lojas.reduce((s,l)=>s+l.e,0), ret:lojas.reduce((s,l)=>s+l.r,0)};
 }
+// Mesmo formato do montarDiasTV do PaletCD v40
+function montarDias(movs){
+  const dias={};
+  movs.forEach(m=>{
+    if(m.tipo!=='Envio para Loja'&&m.tipo!=='Retorno de Loja')return;
+    if(!m.loja)return;
+    const d=parseTs(m.ts);
+    if(!d||isNaN(d.getTime())||d.getFullYear()<2000)return;
+    const k=isoD(d); if(k<INICIO_OPERACAO)return;
+    const dia=dias[k]||(dias[k]={l:{},st:{}});
+    const lk='L'+Number(m.loja);
+    const L=dia.l[lk]||(dia.l[lk]={e:0,r:0,m:{}});
+    const envio=m.tipo==='Envio para Loja', q=m.qtd||0;
+    if(envio){ L.e+=q; const st=m.origem||'REV'; dia.st[st]=(dia.st[st]||0)+q; }
+    else L.r+=q;
+    MODELOS.forEach(x=>{ const v=(m.modelos&&m.modelos[x])||0; if(v) L.m[x]=(L.m[x]||0)+(envio?v:-v); });
+  });
+  Object.values(dias).forEach(dia=>{
+    Object.values(dia.l).forEach(L=>{
+      Object.keys(L.m).forEach(x=>{ if(!L.m[x]) delete L.m[x]; });
+      if(!Object.keys(L.m).length) delete L.m;
+    });
+    if(!Object.keys(dia.st).length) delete dia.st;
+  });
+  return dias;
+}
+
+// Soma os dias do período. Modelos: líquido por loja, fica só o positivo
+// (mesma regra do PaletCD).
+function visaoDias(de,ate){
+  const map={}, setores={}, modelos={};
+  MODELOS.forEach(x=>modelos[x]=0);
+  Object.keys(DIAS).forEach(k=>{
+    if(k<de||k>ate)return;
+    const D=DIAS[k]||{};
+    Object.entries(D.st||{}).forEach(([st,v])=>setores[st]=(setores[st]||0)+(Number(v)||0));
+    Object.entries(D.l||{}).forEach(([lk,L])=>{
+      const d=Number(String(lk).replace(/^L/,''));
+      const o=map[d]||(map[d]={d,e:0,r:0,m:{}});
+      o.e+=Number(L.e)||0; o.r+=Number(L.r)||0;
+      Object.entries(L.m||{}).forEach(([x,v])=>o.m[x]=(o.m[x]||0)+(Number(v)||0));
+    });
+  });
+  const lojas=Object.values(map).filter(o=>o.e||o.r).map(o=>{
+    MODELOS.forEach(x=>{ if((o.m[x]||0)>0) modelos[x]+=o.m[x]; });
+    return {n:nomeLoja(o.d), d:o.d, e:o.e, r:o.r, s:o.e-o.r};
+  }).sort((a,b)=>b.s-a.s);
+  return {lojas, setores, modelos,
+    env:lojas.reduce((s,l)=>s+l.e,0), ret:lojas.reduce((s,l)=>s+l.r,0)};
+}
+
+function getVisao(){
+  const I=intervalo(FILTRO);
+  if(temDias()) return Object.assign({rotulo:I.rotulo}, visaoDias(I.de,I.ate));
+  // PaletCD ainda sem v40: só dá para mostrar as visões fixas antigas
+  const fixo={mes:'mes',d30:'d30',total:'total'}[FILTRO.id];
+  if(fixo && DADOS && DADOS.visoes && DADOS.visoes[fixo]) return DADOS.visoes[fixo];
+  return null;
+}
+
+function renderSemDias(){
+  document.getElementById('periodo').textContent=intervalo(FILTRO).rotulo;
+  document.getElementById('stage').innerHTML=`
+  <div class="panel on">
+    <div class="empty">
+      <div class="empty-ic">📅</div>
+      <div class="empty-t">Resumo diário ainda não publicado</div>
+      <div class="empty-d">
+        Esse período depende do resumo por dia, que o PaletCD v40 publica.
+        Abra o PaletCD atualizado e clique em "📺 Atualizar mural da TV".
+        Até lá, Mês e Total seguem funcionando.
+      </div>
+      <button class="empty-btn" onclick="gerarAgora(this)">Gerar o resumo agora</button>
+    </div>
+  </div>`;
+  TOTAL=1; IDX=0;
+}
+
 function piso(de){ return (!de||de<INICIO_OPERACAO)?INICIO_OPERACAO:de; }
 function montar(movs){
   const p=_p(), h=new Date(+p.year,+p.month-1,+p.day);
@@ -585,9 +816,11 @@ function donut(items,total){
 
 // ── RENDER ─────────────────────────────────────────────
 function render(){
-  if(!DADOS||!DADOS.visoes)return renderVazio();
-  const V=DADOS.visoes[PERIODO]||DADOS.visoes.mes;
-  if(!V)return renderVazio();
+  pintarFiltro();
+  if(!DADOS && !temDias()) return renderVazio();
+  const V=getVisao();
+  if(!V) return renderSemDias();
+  const DD=DADOS||{};
 
   const lojas=(V.lojas||[]);
   const env=V.env||0, ret=V.ret||0, saldo=env-ret;
@@ -603,14 +836,14 @@ function render(){
     : `${nf(ret)} de ${nf(env)} enviados`;
 
   document.getElementById('periodo').textContent=V.rotulo||'—';
-  document.getElementById('f-mov').textContent=nf(DADOS.totalMovs);
-  document.getElementById('f-lojas').textContent=DADOS.lojasCadastradas?nf(DADOS.lojasCadastradas):'—';
-  document.getElementById('f-upd').textContent=DADOS.atualizadoEm||'—';
-  document.getElementById('f-ini').textContent=DADOS.inicioOperacao||INICIO_OPERACAO_BR;
+  document.getElementById('f-mov').textContent=nf(DD.totalMovs);
+  document.getElementById('f-lojas').textContent=DD.lojasCadastradas?nf(DD.lojasCadastradas):'—';
+  document.getElementById('f-upd').textContent=DD.atualizadoEm||'—';
+  document.getElementById('f-ini').textContent=DD.inicioOperacao||INICIO_OPERACAO_BR;
 
   // Painel publicado por versão anterior ao corte: sinaliza em vez de
   // exibir número desatualizado como se fosse o atual.
-  const desatualizado = !DADOS.inicioOperacao;
+  const desatualizado = !!DADOS && !DD.inicioOperacao;
   const per=document.getElementById('periodo');
   if(desatualizado){
     // Clicável: a TV não fica refém de alguém abrir o app para republicar.
@@ -674,7 +907,7 @@ function render(){
       <div class="kpi purple">
         <div class="kpi-l">Lojas com movimento</div>
         <div class="kpi-v">${nf(lojas.length)}</div>
-        <div class="kpi-s">de ${DADOS.lojasCadastradas?nf(DADOS.lojasCadastradas):LOJAS_BASE.length} cadastradas</div>
+        <div class="kpi-s">de ${DD.lojasCadastradas?nf(DD.lojasCadastradas):LOJAS_BASE.length} cadastradas</div>
       </div>
     </div>
   </div>`);
@@ -802,6 +1035,7 @@ document.getElementById('nav-r').addEventListener('click',e=>{e.stopPropagation(
 
 // Bolinhas: o stage é recriado a cada render, então delega no document
 document.addEventListener('click',e=>{
+  if(!e.target.closest('.filtro')) fecharPop();
   const d=e.target.closest('.pdot');
   if(d){ irPara(Number(d.dataset.d)||0,true); return; }
   // Clique/toque no painel: metade direita avança, esquerda volta.
@@ -812,6 +1046,8 @@ document.addEventListener('click',e=>{
 });
 
 document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ fecharPop(); return; }
+  if(e.target && e.target.closest && e.target.closest('input,.fpop')) return;
   if(e.key==='ArrowRight'){e.preventDefault();proximo(true);}
   else if(e.key==='ArrowLeft'){e.preventDefault();anterior(true);}
   else if(e.key===' '){e.preventDefault();alternarPausa();}
@@ -834,9 +1070,12 @@ setInterval(()=>{
   if(p.hour==='04'&&p.minute==='10'&&p.second<'05') location.reload();
 },4000);
 
-if(DADOS)render();
+let _diaRender=hojeISO();
+setInterval(()=>{ const h=hojeISO(); if(h!==_diaRender){ _diaRender=h; render(); } },60000);
+
+if(DADOS||temDias())render(); else pintarFiltro();
 boot();
-console.log('%cPaletCD TV — período: '+PERIODO+' · '+SEG+'s por painel','color:#00d9ff;font-weight:bold');
+console.log('%cPaletCD TV — filtro: '+FILTRO.id+' · '+SEG+'s por painel','color:#00d9ff;font-weight:bold');
 </script>
 </body>
 </html>
