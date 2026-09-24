@@ -91,6 +91,9 @@ body.idle .nav-btn,body.idle .pause-badge{opacity:0;pointer-events:none;}
 }
 .fchip:hover{border-color:var(--navy);color:var(--tx);}
 .fchip.on{background:var(--navy);border-color:var(--navy);color:#fff;}
+.fclear{display:none;border-color:rgba(255,69,58,.5);color:var(--red);}
+.fclear.show{display:inline-block;}
+.fclear:hover{background:rgba(255,69,58,.15);border-color:var(--red);color:var(--red);}
 .fpop{
   position:absolute;top:calc(100% + 10px);right:0;z-index:80;
   background:var(--bg2);border:1px solid var(--navy);border-radius:12px;
@@ -277,6 +280,7 @@ body.idle .nav-btn,body.idle .pause-badge{opacity:0;pointer-events:none;}
     <button class="fchip" data-f="mes">Mês</button>
     <button class="fchip" data-f="total">Total</button>
     <button class="fchip" data-f="livre" id="fchip-livre">📅 Período</button>
+    <button class="fchip fclear" id="fchip-limpar" title="Voltar ao padrão (Mês atual)">✕ Limpar</button>
     <div class="fpop" id="fpop">
       <label>De<input type="date" id="f-de"></label>
       <label>Até<input type="date" id="f-ate"></label>
@@ -466,7 +470,17 @@ function setFiltro(F){
   render();
 }
 
+// Volta ao padrão e esquece o filtro salvo na TV
+function limparFiltro(){
+  try{ localStorage.removeItem(LS_FILTRO); }catch(e){}
+  FILTRO={id:'mes'};
+  fecharPop();
+  IDX=0;
+  render();
+}
+
 function pintarFiltro(){
+  document.getElementById('fchip-limpar').classList.toggle('show', FILTRO.id!=='mes');
   document.querySelectorAll('.fchip').forEach(b=>b.classList.toggle('on', b.dataset.f===FILTRO.id));
   const L=document.getElementById('fchip-livre');
   if(FILTRO.id==='livre'){
@@ -500,6 +514,7 @@ document.getElementById('filtro').addEventListener('click',e=>{
   e.stopPropagation();
   const b=e.target.closest('.fchip');
   if(!b) return;
+  if(b.id==='fchip-limpar'){ limparFiltro(); return; }
   if(b.dataset.f==='livre'){
     document.getElementById('fpop').classList.contains('on') ? fecharPop() : abrirPop();
   } else setFiltro({id:b.dataset.f});
